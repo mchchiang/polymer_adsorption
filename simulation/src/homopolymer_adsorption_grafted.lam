@@ -1,0 +1,210 @@
+# homopolymer_adsorption_grafted.lam
+
+##################################################
+
+# Variables and definitions
+
+variable btime equal (step*DELTA_T)
+
+##################################################
+
+# Simulation basic definitions
+
+units lj
+atom_style angle
+boundary p p p
+neighbor 1.1 bin
+neigh_modify every 1 delay 1 check yes
+
+#restart RESTART_FREQ RESTART_FILE
+read_data INIT_FILE
+
+##################################################
+
+# Simulation box definition -- repulsive at the boundary
+
+change_box all &
+x final XLO XHI &
+y final YLO YHI &
+z final ZLO ZHI &
+boundary f f f units box
+
+fix wall all wall/lj126 &
+xlo EDGE 1.0 1.0 1.12246152962189 &
+xhi EDGE 1.0 1.0 1.12246152962189 &
+ylo EDGE 1.0 1.0 1.12246152962189 &
+yhi EDGE 1.0 1.0 1.12246152962189 &
+zlo EDGE 1.0 1.0 1.12246152962189 &
+zhi EDGE 1.0 1.0 1.12246152962189 units box
+
+##################################################
+##################################################
+# PART 1 - Initial equilibration
+##################################################
+##################################################
+
+# Set Groups
+
+group mobil type 1
+group tether type 2
+
+##################################################
+
+# Set Brownian dynamics
+
+fix 1 mobil nve # NVE ensemble
+fix 2 mobil langevin 1.0 1.0 1.0 PREP_SEED # Brownian dynamics
+
+##################################################
+
+# Integrator
+
+timestep DELTA_T
+
+##################################################
+
+# Parallel computation details
+
+comm_style tiled
+fix bal all balance 100000 1.1 rcb
+
+##################################################
+
+# Dumps/output
+
+compute gyr mobil gyration
+thermo PREP_PRINTFREQ
+thermo_style custom v_btime temp epair vol c_gyr c_gyr[1] c_gyr[2] c_gyr[3]
+dump 1 all custom PREP_PRINTFREQ PREP_OUTFILE id type x y z ix iy iz
+
+##################################################
+
+# Potentials and Runs
+
+bond_style harmonic
+bond_coeff 1 EHARM 1.0
+bond_coeff 2 10 1.0
+
+angle_style cosine
+angle_coeff 1 10.0
+
+# Use soft potential for equilibration to resolve crossovers
+
+pair_style soft 1.12246152962189
+pair_coeff * * ESOFT 1.12246152962189
+pair_coeff 1 2 0.0 0.0
+pair_coeff 2 2 0.0 0.0
+variable asoft equal ramp(0,ESOFT)
+fix push all adapt 1 pair soft a 1 1 v_asoft
+
+run PREP_TIME_1
+
+unfix push
+variable asoft delete
+
+# Change to FENE bonds
+
+bond_style hybrid harmonic fene
+bond_coeff 1 fene 30.0 1.6 1.0 1.0
+bond_coeff 2 harmonic 100.0 1.0
+special_bonds fene
+
+run PREP_TIME_2
+
+# Change to LJ potential
+
+bond_coeff 2 harmonic 1000.0 1.0
+
+pair_style lj/cut 1.12246152962189
+pair_modify shift yes
+pair_coeff * * 1.0 1.0 1.12246152962189
+pair_coeff 1 2 0.0 0.0 0.0
+pair_coeff 2 2 0.0 0.0 0.0
+
+angle_coeff 1 3.0
+
+run PREP_TIME_3
+
+##################################################
+
+# Unfix/undump
+
+write_data PREP_ENDFILE nocoeff
+
+unfix 1
+unfix 2
+undump 1
+unfix wall
+
+##################################################
+##################################################
+# PART 2 - Main simulation - interaction with wall
+##################################################
+##################################################
+
+# Simulation box definition -- repulsive at the boundary
+
+change_box all &
+x final XLO XHI &
+y final YLO YHI & 
+z final ZLO ZHI &
+boundary p p f units box
+
+fix wall all wall/lj126 &
+zlo EDGE 1.0 1.0 1.12246152962189 &
+zhi EDGE 1.0 1.0 1.12246152962189 &
+
+if "EWALL > 0.0" then &
+   "fix wall all wall/lj126 &
+   zlo EDGE 1.0 1.0 1.12246152962189 &
+   zhi EDGE EWALL SIGMA CUTOFF units box"
+
+##################################################
+
+# Set Brownian dynamics
+
+fix 1 mobil nve
+fix 2 mobil langevin 1.0 1.0 1.0 RUN_SEED
+
+##################################################
+
+# Dumps/output
+
+thermo RUN_PRINTFREQ
+thermo_style custom v_btime temp epair vol c_gyr c_gyr[1] c_gyr[2] c_gyr[3]
+dump 1 all custom RUN_PRINTFREQ RUN_OUTFILE id type x y z ix iy iz
+
+##################################################
+
+# Pairwise attraction between beads
+
+pair_style lj/cut 1.12246152962189
+pair_modify shift yes
+pair_coeff * * 1.0 1.0 1.12246152962189
+
+if "EBEAD > 0.0" then &
+   "pair_coeff * * EBEAD SIGMA CUTOFF"
+
+pair_coeff 1 2 0.0 0.0 0.0 # No interactions between tether and polymer beads
+pair_coeff 2 2 0.0 0.0 0.0
+
+##################################################
+
+# Run
+
+reset_timestep 0
+
+run RUN_TIME
+
+##################################################
+
+# Unfix/undump
+
+write_data RUN_ENDFILE nocoeff
+
+unfix 1
+unfix 2
+unfix wall
+undump 1
+
+##################################################
